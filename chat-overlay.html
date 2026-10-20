@@ -30,7 +30,7 @@
   .manga .msg {
     position: relative; align-self: flex-start; max-width: 90%;
     background: #fff; color: #000; border: 4px solid #000; border-radius: 26px;
-    padding: 20px 20px 12px; font-size: var(--fs); font-weight: 700; line-height: 1.15;
+    padding: 22px 20px 12px; min-width: 120px; font-size: var(--fs); font-weight: 700; line-height: 1.15;
     box-shadow: 5px 5px 0 #000; word-wrap: break-word; overflow-wrap: anywhere;
     transform: rotate(var(--rot, 0deg));
     animation: pop .35s cubic-bezier(.2, 1.7, .4, 1) both;
@@ -38,12 +38,13 @@
   .manga .msg::before { content: ""; position: absolute; left: 26px; bottom: -26px; border: 14px solid transparent; border-top: 24px solid #000; border-bottom: 0; }
   .manga .msg::after  { content: ""; position: absolute; left: 30px; bottom: -17px; border: 10px solid transparent; border-top: 18px solid #fff; border-bottom: 0; }
   .manga .name {
-    position: absolute; top: -17px; left: 16px; padding: 0 10px; border: 3px solid #000; border-radius: 10px;
+    display: block; width: fit-content; white-space: nowrap;
+    margin: -39px 0 8px -4px; padding: 0 10px; border: 3px solid #000; border-radius: 10px;
     background: var(--c, #9146ff); color: #fff; font-family: 'Bangers', cursive; font-weight: 400; letter-spacing: 1px;
     font-size: calc(var(--fs) * .85); line-height: 1.25;
     text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
   }
-  .manga .badges { margin-right: 4px; }
+  .manga .badges { margin-right: 4px; text-shadow: none; }
   @keyframes pop { from { transform: rotate(var(--rot, 0deg)) scale(.3); opacity: 0; } to { transform: rotate(var(--rot, 0deg)) scale(1); opacity: 1; } }
 
   /* ---------- ESTILO TELE ---------- */
