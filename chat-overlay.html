@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Chat overlay</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@700&family=VT323&display=swap" rel="stylesheet">
+<!--
+  PARAMETROS EN LA URL (todos opcionales menos canal):
+    ?canal=taiki_02          canal de Twitch a leer
+    &estilo=manga | tele     estilo visual (por defecto: manga)
+    &max=6                   cantidad maxima de mensajes en pantalla
+    &tiempo=20               segundos hasta que un mensaje desaparece (0 = nunca)
+    &tamano=24               tamano de letra en px (en "tele" se calcula solo)
+    &tele=tele.png           imagen del marco de la tele (estilo tele)
+    &ocultar=nightbot,...    usuarios a ocultar (por defecto bots comunes)
+    &comandos=1              mostrar mensajes que empiezan con "!"
+    &demo=1                  mensajes de prueba, sin conectarse a Twitch
+-->
+<style>
+  :root { --fs: 24px; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body { font-family: 'Comic Neue', 'Comic Sans MS', sans-serif; }
+  #chat { box-sizing: border-box; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; overflow: hidden; }
+  .emote { height: 1.5em; vertical-align: middle; margin: -0.2em 1px 0; }
+  .msg.out { opacity: 0 !important; transition: opacity .6s; }
+
+  /* ---------- ESTILO MANGA ---------- */
+  .manga #chat { padding: 28px 26px 40px 34px; gap: 34px; }
+  .manga .msg {
+    position: relative; align-self: flex-start; max-width: 90%;
+    background: #fff; color: #000; border: 4px solid #000; border-radius: 26px;
+    padding: 20px 20px 12px; font-size: var(--fs); font-weight: 700; line-height: 1.15;
+    box-shadow: 5px 5px 0 #000; word-wrap: break-word; overflow-wrap: anywhere;
+    transform: rotate(var(--rot, 0deg));
+    animation: pop .35s cubic-bezier(.2, 1.7, .4, 1) both;
+  }
+  .manga .msg::before { content: ""; position: absolute; left: 26px; bottom: -26px; border: 14px solid transparent; border-top: 24px solid #000; border-bottom: 0; }
+  .manga .msg::after  { content: ""; position: absolute; left: 30px; bottom: -17px; border: 10px solid transparent; border-top: 18px solid #fff; border-bottom: 0; }
+  .manga .name {
+    position: absolute; top: -17px; left: 16px; padding: 0 10px; border: 3px solid #000; border-radius: 10px;
+    background: var(--c, #9146ff); color: #fff; font-family: 'Bangers', cursive; font-weight: 400; letter-spacing: 1px;
+    font-size: calc(var(--fs) * .85); line-height: 1.25;
+    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+  }
+  .manga .badges { margin-right: 4px; }
+  @keyframes pop { from { transform: rotate(var(--rot, 0deg)) scale(.3); opacity: 0; } to { transform: rotate(var(--rot, 0deg)) scale(1); opacity: 1; } }
+
+  /* ---------- ESTILO TELE ---------- */
+  .tele #tv { position: relative; }
+  .tele #tv canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; }
+  .tele #screenbg {
+    position: absolute; z-index: 1; border-radius: 9%/11%;
+    background: radial-gradient(ellipse at center, #1b2a6b 0%, #0b1138 100%);
+    box-shadow: inset 0 0 25px #000;
+  }
+  .tele.fallback #screenbg { z-index: 3; }
+  .tele #screenbox { position: absolute; z-index: 4; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+  .tele #screenbox::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0, rgba(0,0,0,.18) 1px, transparent 1px, transparent 3px);
+  }
+  .tele #chat { height: auto; padding: 0; gap: .15em; }
+  .tele .msg { font-family: 'VT323', monospace; font-size: var(--fs); line-height: 1.05; color: #eef1ff; text-shadow: 0 0 6px rgba(160,190,255,.6); word-wrap: break-word; overflow-wrap: anywhere; animation: fadein .25s both; }
+  .tele .name { color: var(--c, #9146ff); margin-right: .35em; filter: brightness(1.35); }
+  .tele .name::after { content: ":"; color: #eef1ff; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="tv" style="display:none">
+    <div id="screenbg"></div>
+    <div id="screenbox"><div id="chat-tele-slot"></div></div>
+  </div>
+  <div id="chat"></div>
+</div>
+
+<script>
+(() => {
+  const P = new URLSearchParams(location.search);
+  const canal = (P.get('canal') || 'taiki_02').toLowerCase().replace(/^#/, '');
+  const estilo = (P.get('estilo') || 'manga').toLowerCase() === 'tele' ? 'tele' : 'manga';
+  const MAX = Math.max(1, parseInt(P.get('max')) || (estilo === 'tele' ? 8 : 5));
+  const TIEMPO = P.has('tiempo') ? Math.max(0, parseFloat(P.get('tiempo')) || 0) : 25;
+  const OCULTAR = (P.get('ocultar') || 'nightbot,streamelements,streamlabs,moobot,fossabot,wizebot')
+    .toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+  const COMANDOS = P.get('comandos') === '1';
+  const DEMO = P.get('demo') === '1';
+
+  document.body.classList.add(estilo);
+  const chat = document.getElementById('chat');
+  if (P.get('tamano')) document.documentElement.style.setProperty('--fs', parseFloat(P.get('tamano')) + 'px');
+
+  /* ---------- Mensajes ---------- */
+  const BADGES = { broadcaster: '🎥', moderator: '⚔️', vip: '💎', subscriber: '⭐', founder: '⭐' };
+
+  function renderText(text, emotesTag, el) {
+    const chars = Array.from(text);
+    const ranges = [];
+    if (emotesTag) {
+      emotesTag.split('/').forEach(e => {
+        const [id, pos] = e.split(':');
+        if (!pos) return;
+        pos.split(',').forEach(p => {
+          const [a, b] = p.split('-').map(Number);
+          ranges.push({ a, b, id });
+        });
+      });
+    }
+    ranges.sort((x, y) => x.a - y.a);
+    let i = 0;
+    for (const r of ranges) {
+      if (r.a > i) el.append(chars.slice(i, r.a).join(''));
+      const im = new Image();
+      im.className = 'emote';
+      im.src = `https://static-cdn.jtvnw.net/emoticons/v2/${r.id}/default/dark/2.0`;
+      el.append(im);
+      i = r.b + 1;
+    }
+    if (i < chars.length) el.append(chars.slice(i).join(''));
+  }
+
+  function addMessage({ user, color, badges, text, emotes }) {
+    const msg = document.createElement('div');
+    msg.className = 'msg';
+    msg.style.setProperty('--c', color || '#9146ff');
+    msg.style.setProperty('--rot', (Math.random() * 3 - 1.5).toFixed(2) + 'deg');
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    const b = (badges || '').split(',').map(x => x.split('/')[0]).map(x => BADGES[x]).filter(Boolean);
+    if (b.length) {
+      const sp = document.createElement('span');
+      sp.className = 'badges';
+      sp.textContent = [...new Set(b)].join('');
+      name.append(sp);
+    }
+    name.append(user);
+
+    const body = document.createElement('span');
+    body.className = 'text';
+    renderText(text, emotes, body);
+
+    msg.append(name);
+    if (estilo === 'tele') msg.append(' ');
+    msg.append(body);
+    chat.append(msg);
+
+    while (chat.children.length > MAX) chat.firstChild.remove();
+    if (TIEMPO > 0) {
+      setTimeout(() => { msg.classList.add('out'); setTimeout(() => msg.remove(), 700); }, TIEMPO * 1000);
+    }
+  }
+
+  /* ---------- Twitch IRC (solo lectura, anonimo) ---------- */
+  function parseLine(line) {
+    const tags = {};
+    if (line[0] === '@') {
+      const i = line.indexOf(' ');
+      line.slice(1, i).split(';').forEach(t => {
+        const k = t.indexOf('=');
+        tags[t.slice(0, k)] = t.slice(k + 1).replace(/\\s/g, ' ').replace(/\\:/g, ';').replace(/\\\\/g, '\\');
+      });
+      line = line.slice(i + 1);
+    }
+    const m = line.match(/^:([^!]+)![^ ]+ PRIVMSG #[^ ]+ :(.*)$/);
+    if (!m) return null;
+    let text = m[2];
+    if (text.startsWith('\x01ACTION ')) text = text.slice(8).replace(/\x01$/, '');
+    return { login: m[1], tags, text };
+  }
+
+  function connect() {
+    const ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+    ws.onopen = () => {
+      ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+      ws.send('PASS SCHMOOPIIE');
+      ws.send('NICK justinfan' + Math.floor(10000 + Math.random() * 80000));
+      ws.send('JOIN #' + canal);
+    };
+    ws.onmessage = ev => {
+      ev.data.split('\r\n').filter(Boolean).forEach(line => {
+        if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); return; }
+        const p = parseLine(line);
+        if (!p) return;
+        if (OCULTAR.includes(p.login.toLowerCase())) return;
+        if (!COMANDOS && p.text.startsWith('!')) return;
+        addMessage({
+          user: p.tags['display-name'] || p.login,
+          color: p.tags['color'],
+          badges: p.tags['badges'],
+          text: p.text,
+          emotes: p.tags['emotes']
+        });
+      });
+    };
+    ws.onclose = () => setTimeout(connect, 3000);
+    ws.onerror = () => ws.close();
+  }
+
+  /* ---------- Demo ---------- */
+  function demo() {
+    const users = [
+      ['Taiki', '#ff6fb5', 'broadcaster/1'], ['Izamardoll', '#1e90ff', 'subscriber/6'],
+      ['PokeFan', '#2ecc71', 'moderator/1'], ['AnimeLover', '#ff8c00', 'vip/1'], ['Viewer123', '#9146ff', '']
+    ];
+    const lines = ['Hola a todos!', 'Qué capítulo vemos hoy?', 'Este opening es lo mejor', 'jajajaja no puede ser',
+      'Primera vez acá, un saludo desde Argentina', 'Dale que arrancamos!', 'GG'];
+    let n = 0;
+    const tick = () => {
+      const u = users[n % users.length];
+      addMessage({ user: u[0], color: u[1], badges: u[2], text: lines[n % lines.length] });
+      n++;
+      setTimeout(tick, 1500 + Math.random() * 1500);
+    };
+    tick();
+  }
+
+  /* ---------- Estilo tele: marco + pantalla ---------- */
+  // Vacia (pone transparente) una zona conectada desde (sx,sy).
+  // mode 'screen': la pantalla ya transparente o blanca; mode 'bg': solo fondo blanco opaco.
+  function floodTransparent(d, W, H, sx, sy, mode) {
+    const px = d.data;
+    const white = i => px[i + 3] > 0 && px[i] > 225 && px[i + 1] > 225 && px[i + 2] > 225;
+    const empty = i => px[i + 3] < 40 || white(i);
+    const ok = mode === 'bg' ? white : empty;
+    if (!ok((sy * W + sx) * 4)) return null;
+    const stack = [sx, sy];
+    let x0 = W, y0 = H, x1 = 0, y1 = 0;
+    const seen = new Uint8Array(W * H);
+    while (stack.length) {
+      const y = stack.pop(), x = stack.pop();
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      if (seen[y * W + x]) continue;
+      seen[y * W + x] = 1;
+      const i = (y * W + x) * 4;
+      if (!ok(i)) continue;
+      px[i + 3] = 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      stack.push(x + 1, y, x - 1, y, x, y + 1, x, y - 1);
+    }
+    return { x0, y0, x1, y1 };
+  }
+
+  async function setupTele() {
+    const tv = document.getElementById('tv');
+    const bg = document.getElementById('screenbg');
+    const box = document.getElementById('screenbox');
+    box.replaceChildren(chat);
+    tv.style.display = 'block';
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = P.get('tele') || 'tele.png';
+    try { await new Promise((ok, no) => { img.onload = ok; img.onerror = no; }); }
+    catch (e) {
+      document.body.insertAdjacentHTML('afterbegin',
+        '<div style="color:#fff;font:16px sans-serif;background:#c00;padding:8px">No se encontró la imagen de la tele (' + (P.get('tele') || 'tele.png') + '). Guardala en la misma carpeta que este archivo.</div>');
+      return;
+    }
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    tv.append(cv);
+
+    let area = null;
+    try {
+      const d = ctx.getImageData(0, 0, W, H);
+      // limpiar fondo exterior si es blanco opaco
+      floodTransparent(d, W, H, 0, 0, 'bg');
+      // vaciar la pantalla (blanca) desde el centro
+      area = floodTransparent(d, W, H, Math.round(W * 0.48), Math.round(H * 0.5), 'screen');
+      ctx.putImageData(d, 0, 0);
+    } catch (e) { /* canvas bloqueado: se usa el area estimada */ }
+
+    if (!area) {
+      document.body.classList.add('fallback');
+      area = { x0: W * 0.092, y0: H * 0.184, x1: W * 0.83, y1: H * 0.80 };
+    }
+
+    function layout() {
+      const s = Math.min(innerWidth / W, innerHeight / H);
+      tv.style.width = W * s + 'px';
+      tv.style.height = H * s + 'px';
+      const ax = area.x0 * s, ay = area.y0 * s, aw = (area.x1 - area.x0) * s, ah = (area.y1 - area.y0) * s;
+      for (const el of [bg, box]) {
+        el.style.left = ax + 'px'; el.style.top = ay + 'px';
+        el.style.width = aw + 'px'; el.style.height = ah + 'px';
+      }
+      const padX = aw * 0.09, padY = ah * 0.1;
+      box.style.padding = `${padY}px ${padX}px`;
+      if (!P.get('tamano')) document.documentElement.style.setProperty('--fs', (ah / 8.5) + 'px');
+    }
+    layout();
+    addEventListener('resize', layout);
+  }
+
+  /* ---------- Inicio ---------- */
+  (async () => {
+    if (estilo === 'tele') await setupTele();
+    if (DEMO) demo(); else connect();
+  })();
+})();
+</script>
+</body>
+</html>
