@@ -85,7 +85,9 @@
   const kickCanal = (P.get('kick') || '').toLowerCase().trim();
   // Si se pide solo Kick, no se conecta a Twitch (salvo que se pase ?canal=)
   const canal = (P.get('canal') || (kickCanal ? '' : 'taiki_02')).toLowerCase().replace(/^#/, '');
-  let kickId = P.get('kickid') || '';
+  // IDs de chat de Kick ya conocidos (asi no hace falta &kickid= en la URL)
+  const KICK_IDS = { taikidisi: '125474114' };
+  let kickId = P.get('kickid') || KICK_IDS[kickCanal] || '';
   const estilo = (P.get('estilo') || 'manga').toLowerCase() === 'tele' ? 'tele' : 'manga';
   const MAX = Math.max(1, parseInt(P.get('max')) || (estilo === 'tele' ? 8 : 5));
   const TIEMPO = P.has('tiempo') ? Math.max(0, parseFloat(P.get('tiempo')) || 0) : 25;
@@ -240,7 +242,7 @@
   async function connectKick() {
     kickId = await resolveKickId();
     if (!kickId) { banner('Kick: no pude obtener el ID del chat. Agrega &kickid=NUMERO a la URL.'); return; }
-    const ws = new WebSocket('wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false');
+    const ws = new WebSocket('wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false');
     ws.onmessage = ev => {
       let d;
       try { d = JSON.parse(ev.data); } catch (x) { return; }
